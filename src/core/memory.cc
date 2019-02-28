@@ -60,6 +60,8 @@
 #include <seastar/util/std-compat.hh>
 #include <iostream>
 
+#include <dlfcn.h>
+
 namespace seastar {
 
 void* internal::allocate_aligned_buffer_impl(size_t size, size_t align) {
@@ -178,6 +180,22 @@ static thread_local uint64_t g_reclaims;
 static thread_local uint64_t g_large_allocs;
 
 using compat::optional;
+
+// original memory allocator support
+// note: allocations before calling the constructor would use seastar allocator
+using malloc_func_type = void * (*)(size_t);
+using free_func_type = void * (*)(void *);
+using realloc_func_type = void * (*)(void *, size_t);
+using aligned_alloc_type = void * (*)(size_t alignment, size_t size);
+using malloc_trim_type = int (*)(size_t);
+using malloc_usable_size_type = size_t (*)(void *);
+
+malloc_func_type original_malloc_func = reinterpret_cast<malloc_func_type>(dlsym(RTLD_NEXT, "malloc"));
+free_func_type original_free_func = reinterpret_cast<free_func_type>(dlsym(RTLD_NEXT, "free"));
+realloc_func_type original_realloc_func = reinterpret_cast<realloc_func_type>(dlsym(RTLD_NEXT, "realloc"));
+aligned_alloc_type original_aligned_alloc_func = reinterpret_cast<aligned_alloc_type>(dlsym(RTLD_NEXT, "aligned_alloc"));
+malloc_trim_type original_malloc_trim_func = reinterpret_cast<malloc_trim_type>(dlsym(RTLD_NEXT, "malloc_trim"));
+malloc_usable_size_type original_malloc_usable_size_func = reinterpret_cast<malloc_usable_size_type>(dlsym(RTLD_NEXT, "malloc_usable_size"));
 
 using allocate_system_memory_fn
         = std::function<mmap_area (optional<void*> where, size_t how_much)>;
