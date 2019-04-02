@@ -207,6 +207,9 @@ using allocate_system_memory_fn
 
 namespace bi = boost::intrusive;
 
+static thread_local uintptr_t local_cpu_id_mask;
+static thread_local uintptr_t local_expected_cpu_id = std::numeric_limits<uintptr_t>::max();
+
 inline
 unsigned object_cpu_id(const void* ptr) {
     return (reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff;
@@ -859,15 +862,15 @@ void cpu_pages::free(void* ptr, size_t size) {
 
 bool
 cpu_pages::try_foreign_free(void* ptr) {
-    auto obj_cpu = object_cpu_id(ptr);
+    // fast path for local free
+    if (__builtin_expect((reinterpret_cast<uintptr_t>(ptr) & local_cpu_id_mask) == local_expected_cpu_id, true)) {
+        return false;
+    }
     if (!is_seastar_memory(ptr)) {
         original_free_func(ptr);
         return true;
     }
-    if (obj_cpu == cpu_id) {
-        return false;
-    }
-    free_cross_cpu(obj_cpu, ptr);
+    free_cross_cpu(object_cpu_id(ptr), ptr);
     return true;
 }
 
@@ -915,6 +918,8 @@ bool cpu_pages::initialize() {
         return false;
     }
     cpu_id = cpu_id_gen.fetch_add(1, std::memory_order_relaxed);
+    local_expected_cpu_id = static_cast<uint64_t>(cpu_id) << cpu_id_shift;
+    local_cpu_id_mask = 0xffULL << cpu_id_shift;
     assert(cpu_id < max_cpus);
     all_cpus[cpu_id] = this;
     auto base = mem_base() + (size_t(cpu_id) << cpu_id_shift);
